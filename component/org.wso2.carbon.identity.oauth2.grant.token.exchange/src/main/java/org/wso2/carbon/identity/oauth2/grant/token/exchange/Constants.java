@@ -67,6 +67,10 @@ public class Constants {
         public static final String AZP = "azp";
         public static final String CLIENT_ID = "client_id";
         public static final String ACT = "act";
+        public static final String IS_DELEGATION_REQUEST = "IS_DELEGATION_REQUEST";
+        public static final String ACTOR_SUBJECT = "ACTOR_SUBJECT";
+        public static final String ACTOR_AZP = "ACTOR_AZP";
+        public static final String EXISTING_ACT_CLAIM = "EXISTING_ACT_CLAIM";
 
     }
 
