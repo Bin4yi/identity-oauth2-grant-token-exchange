@@ -95,6 +95,7 @@ import static org.wso2.carbon.identity.oauth2.grant.token.exchange.utils.TokenEx
 import static org.wso2.carbon.identity.oauth2.grant.token.exchange.utils.TokenExchangeUtils.validateSignature;
 import static org.wso2.carbon.identity.oauth2.token.AccessTokenIssuer.OAUTH_APP_DO;
 import static org.wso2.carbon.identity.oauth2.util.OAuth2Util.isJWT;
+import org.wso2.carbon.identity.oauth.dao.OAuthAppDO;
 
 /**
  * Class to handle Token Exchange grant type.
@@ -169,6 +170,24 @@ public class TokenExchangeGrantHandler extends AbstractAuthorizationGrantHandler
             requestedAudience = requestParams.get(Constants.TokenExchangeConstants.AUDIENCE);
         }
 
+        // Set requested audience in the token request context so JWTTokenIssuer can use it
+        if (StringUtils.isNotEmpty(requestedAudience)) {
+            // Parse comma-separated audiences if multiple are provided
+            List<String> requestedAudiences = Arrays.asList(requestedAudience.split(",")
+                    .stream()
+                    .map(String::trim)
+                    .filter(StringUtils::isNotEmpty)
+                    .collect(Collectors.toList());
+
+            if (!requestedAudiences.isEmpty()) {
+                validateRequestedAudience(tokReqMsgCtx, requestedAudiences);
+                tokReqMsgCtx.setAudiences(requestedAudiences);
+                if (log.isDebugEnabled()) {
+                    log.debug("Requested audiences in token exchange: " + requestedAudiences);
+                }
+            }
+        }
+
         String tenantDomain = getTenantDomain(tokReqMsgCtx);
         SignedJWT subjectSignedJWT = getSignedJWT(requestParams.get(SUBJECT_TOKEN));
         JWTClaimsSet subjectClaimsSet = (subjectSignedJWT != null) ? getClaimSet(subjectSignedJWT) : null;
@@ -196,7 +215,6 @@ public class TokenExchangeGrantHandler extends AbstractAuthorizationGrantHandler
             return true;
         }
 
-        JWTClaimsSet subjectClaimsSet = (subjectSignedJWT != null) ? getClaimSet(subjectSignedJWT) : null;
         if (isImpersonationRequest(requestParams, subjectClaimsSet)) {
             validateSubjectToken(tokReqMsgCtx, requestParams, tenantDomain);
             validateActorToken(tokReqMsgCtx, requestParams, tenantDomain);
