@@ -53,7 +53,7 @@ import org.wso2.carbon.user.core.common.AbstractUserStoreManager;
 import org.wso2.carbon.user.core.listener.UserOperationEventListener;
 import org.wso2.carbon.utils.DiagnosticLog;
 import org.wso2.carbon.utils.multitenancy.MultitenantConstants;
-import org.wso2.carbon.identity.oauth2.grant.token.exchange.model.ActClaim;
+//import org.wso2.carbon.identity.oauth2.grant.token.exchange.model.ActClaim;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -119,26 +119,64 @@ public class TokenExchangeGrantHandler extends AbstractAuthorizationGrantHandler
                     + "Token Exchange grant");
         }
     }
+
+    /**
+     * Safely extracts and validates the act claim from a JWT claims set.
+     *
+     * @param claimsSet The JWT claims set
+     * @return The act claim as a Map, or null if not present or invalid
+     */
+    private Map<String, Object> extractActClaim(JWTClaimsSet claimsSet) {
+        Object rawActClaim = claimsSet.getClaim(ACT);
+
+        if (rawActClaim == null) {
+            return null;
+        }
+
+        if (!(rawActClaim instanceof Map)) {
+            if (log.isDebugEnabled()) {
+                log.debug("Invalid act claim type: expected Map, got " + rawActClaim.getClass().getName());
+            }
+            return null;
+        }
+
+        Map<String, Object> actClaim = (Map<String, Object>) rawActClaim;
+
+        // Validate required 'sub' field
+        if (actClaim.get(SUB) == null) {
+            if (log.isDebugEnabled()) {
+                log.debug("Invalid act claim: missing required 'sub' field");
+            }
+            return null;
+        }
+
+        return actClaim;
+    }
     /**
      * Recursively extracts all actor subjects from a nested ActClaim chain.
      *
      * @param actClaim The typed ActClaim (recursive type)
      * @return List of actor subjects in order from most recent to oldest
      */
-    private List<String> extractActorChain(ActClaim actClaim) {
-
+    private List<String> extractActorChain(Map<String, Object> actClaim) {
         List<String> actorChain = new ArrayList<>();
 
         if (actClaim == null) {
             return actorChain;
         }
 
-        // Collect actor subject at the current delegation level (most recent actor first)
-        actorChain.add(actClaim.getSub());
+        // Get the subject at the outermost level
+        Object subClaim = actClaim.get(SUB);
+        if (subClaim != null) {
+            actorChain.add(subClaim.toString());
+        }
 
-        // Recursively process the nested act claim
-        if (actClaim.hasNestedAct()) {
-            actorChain.addAll(extractActorChain(actClaim.getAct()));
+        // Recursively process nested act claim
+        Object nestedActRaw = actClaim.get(ACT);
+        if (nestedActRaw instanceof Map) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> nestedAct = (Map<String, Object>) nestedActRaw;
+            actorChain.addAll(extractActorChain(nestedAct));
         }
 
         return actorChain;
@@ -212,7 +250,7 @@ public class TokenExchangeGrantHandler extends AbstractAuthorizationGrantHandler
             return true;
         }
 
-        if (isImpersonationRequest(requestParams)) {
+        if (isImpersonationRequest(requestParams, subjectClaimsSet)) {
             validateSubjectToken(tokReqMsgCtx, requestParams, tenantDomain);
             validateActorToken(tokReqMsgCtx, requestParams, tenantDomain);
             // Set impersonation flag
@@ -243,10 +281,10 @@ public class TokenExchangeGrantHandler extends AbstractAuthorizationGrantHandler
                 }
             }
 
-            Object rawActClaim = subjectClaimsSet.getClaim(ACT);
-            ActClaim existingActClaim = ActClaim.fromRawClaim(rawActClaim);
+            Map<String, Object> existingActClaim = extractActClaim(subjectClaimsSet);
             if (existingActClaim != null) {
                 tokReqMsgCtx.addProperty(EXISTING_ACT_CLAIM, existingActClaim);
+
                 if (log.isDebugEnabled()) {
                     List<String> existingActorChain = extractActorChain(existingActClaim);
                     log.debug("Found existing act claim chain: " + existingActorChain);
@@ -326,13 +364,21 @@ public class TokenExchangeGrantHandler extends AbstractAuthorizationGrantHandler
      * @param requestParams A Map<String, String> containing the request parameters.
      * @return true if the request is an impersonation request and false otherwise.
      */
-    private boolean isImpersonationRequest(Map<String, String> requestParams) {
+    private boolean isImpersonationRequest(Map<String, String> requestParams, JWTClaimsSet subjectClaimsSet){
 
         // Check if all required parameters are present
-        return requestParams.containsKey(SUBJECT_TOKEN)
-                && requestParams.containsKey(TokenExchangeConstants.SUBJECT_TOKEN_TYPE)
-                && requestParams.containsKey(TokenExchangeConstants.ACTOR_TOKEN)
-                && requestParams.containsKey(TokenExchangeConstants.ACTOR_TOKEN_TYPE);
+        if (!requestParams.containsKey(TokenExchangeConstants.SUBJECT_TOKEN) ||
+                !requestParams.containsKey(TokenExchangeConstants.SUBJECT_TOKEN_TYPE) ||
+                !requestParams.containsKey(TokenExchangeConstants.ACTOR_TOKEN) ||
+                !requestParams.containsKey(TokenExchangeConstants.ACTOR_TOKEN_TYPE)) {
+            return false;
+        }
+
+        // For impersonation, the subject token MUST have may_act claim
+        if (subjectClaimsSet == null) {
+            return false;
+        }
+        return subjectClaimsSet.getClaim(MAY_ACT) != null;
     }
 
     /**
@@ -517,59 +563,6 @@ public class TokenExchangeGrantHandler extends AbstractAuthorizationGrantHandler
             TokenExchangeUtils.handleClientException(TokenExchangeConstants.INVALID_TARGET,
                     "Invalid audience values provided for subject token.");
         }
-
-        tokReqMsgCtx.addProperty(IMPERSONATED_SUBJECT, subject);
-        tokReqMsgCtx.setScope(getScopes(claimsSet, tokReqMsgCtx));
-    }
-    /**
-     * Validates the subject token for delegation scenarios.
-     * Unlike impersonation, delegation does NOT require a may_act claim in the
-     * subject token.
-     *
-     * @param tokReqMsgCtx  OauthTokenReqMessageContext
-     * @param requestParams request parameter map.
-     * @param tenantDomain  The tenant domain associated with the request.
-     * @throws IdentityOAuth2Exception If there's an error during token validation.
-     */
-    private void validateSubjectTokenForDelegation(OAuthTokenReqMessageContext tokReqMsgCtx,
-                                                   Map<String, String> requestParams,
-                                                   String tenantDomain,
-                                                   SignedJWT signedJWT,
-                                                   JWTClaimsSet claimsSet)
-            throws IdentityOAuth2Exception {
-
-        // Validate mandatory claims
-        String subject = resolveSubject(claimsSet);
-        validateMandatoryClaims(claimsSet, subject);
-
-        // NOTE: We SKIP impersonator validation for delegation
-        // In delegation, there is no may_act claim because this is not impersonation
-
-        String jwtIssuer = claimsSet.getIssuer();
-        IdentityProvider identityProvider = getIdentityProvider(tokReqMsgCtx, jwtIssuer, tenantDomain);
-
-        try {
-            if (validateSignature(signedJWT, identityProvider, tenantDomain)) {
-                log.debug("Signature/MAC validated successfully for subject token.");
-            } else {
-                handleException(OAuth2ErrorCodes.INVALID_REQUEST, "Signature or Message Authentication "
-                        + "invalid for subject token.");
-            }
-        } catch (JOSEException e) {
-            handleException(OAuth2ErrorCodes.INVALID_REQUEST, "Error when verifying signature for subject token ", e);
-        }
-
-        checkJWTValidity(claimsSet);
-
-        // Validate the audience of the subject token
-        List<String> audiences = claimsSet.getAudience();
-        if (!validateSubjectTokenAudience(audiences, tokReqMsgCtx)) {
-            TokenExchangeUtils.handleClientException(TokenExchangeConstants.INVALID_TARGET,
-                    "Invalid audience values provided for subject token.");
-        }
-
-        // Validate the issuer of the subject token
-        validateTokenIssuer(jwtIssuer, tenantDomain);
 
         tokReqMsgCtx.addProperty(IMPERSONATED_SUBJECT, subject);
         tokReqMsgCtx.setScope(getScopes(claimsSet, tokReqMsgCtx));
