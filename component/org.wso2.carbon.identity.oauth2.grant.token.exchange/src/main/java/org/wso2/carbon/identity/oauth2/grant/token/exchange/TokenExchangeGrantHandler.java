@@ -37,6 +37,7 @@ import org.wso2.carbon.identity.event.IdentityEventException;
 import org.wso2.carbon.identity.handler.event.account.lock.exception.AccountLockException;
 import org.wso2.carbon.identity.oauth.common.OAuth2ErrorCodes;
 import org.wso2.carbon.identity.oauth.config.OAuthServerConfiguration;
+import org.wso2.carbon.identity.oauth.dao.OAuthAppDO;
 import org.wso2.carbon.identity.oauth2.IdentityOAuth2Exception;
 import org.wso2.carbon.identity.oauth2.dto.OAuth2AccessTokenRespDTO;
 import org.wso2.carbon.identity.oauth2.grant.token.exchange.Constants.TokenExchangeConstants;
@@ -92,6 +93,7 @@ import static org.wso2.carbon.identity.oauth2.grant.token.exchange.utils.TokenEx
 import static org.wso2.carbon.identity.oauth2.grant.token.exchange.utils.TokenExchangeUtils.setAuthorizedUserForImpersonation;
 import static org.wso2.carbon.identity.oauth2.grant.token.exchange.utils.TokenExchangeUtils.validateIssuedAtTime;
 import static org.wso2.carbon.identity.oauth2.grant.token.exchange.utils.TokenExchangeUtils.validateSignature;
+import static org.wso2.carbon.identity.oauth2.token.AccessTokenIssuer.OAUTH_APP_DO;
 import static org.wso2.carbon.identity.oauth2.util.OAuth2Util.isJWT;
 
 /**
@@ -170,8 +172,6 @@ public class TokenExchangeGrantHandler extends AbstractAuthorizationGrantHandler
         String tenantDomain = getTenantDomain(tokReqMsgCtx);
         SignedJWT subjectSignedJWT = getSignedJWT(requestParams.get(SUBJECT_TOKEN));
         JWTClaimsSet subjectClaimsSet = (subjectSignedJWT != null) ? getClaimSet(subjectSignedJWT) : null;
-        SignedJWT subjectSignedJWT = getSignedJWT(requestParams.get(SUBJECT_TOKEN));
-        JWTClaimsSet subjectClaimsSet = (subjectSignedJWT != null) ? getClaimSet(subjectSignedJWT) : null;
 
         // Check for self-delegation first (application exchanging its own token without actor)
         if (isSelfDelegationRequest(requestParams, tokReqMsgCtx, subjectClaimsSet)) {
@@ -196,7 +196,8 @@ public class TokenExchangeGrantHandler extends AbstractAuthorizationGrantHandler
             return true;
         }
 
-        if (isImpersonationRequest(requestParams)) {
+        JWTClaimsSet subjectClaimsSet = (subjectSignedJWT != null) ? getClaimSet(subjectSignedJWT) : null;
+        if (isImpersonationRequest(requestParams, subjectClaimsSet)) {
             validateSubjectToken(tokReqMsgCtx, requestParams, tenantDomain);
             validateActorToken(tokReqMsgCtx, requestParams, tenantDomain);
             // Set impersonation flag
@@ -309,7 +310,7 @@ public class TokenExchangeGrantHandler extends AbstractAuthorizationGrantHandler
      * @param requestParams A Map<String, String> containing the request parameters.
      * @return true if the request is an impersonation request and false otherwise.
      */
-    private boolean isImpersonationRequest(Map<String, String> requestParams) {
+    private boolean isImpersonationRequest(Map<String, String> requestParams,  JWTClaimsSet subjectClaimsSet) {
 
         // Check if all required parameters are present
         if (!requestParams.containsKey(TokenExchangeConstants.SUBJECT_TOKEN) ||
@@ -419,59 +420,6 @@ public class TokenExchangeGrantHandler extends AbstractAuthorizationGrantHandler
         tokReqMsgCtx.setScope(getScopes(claimsSet, tokReqMsgCtx));
     }
 
-    /**
-     * Validates the subject token for delegation scenarios.
-     * Unlike impersonation, delegation does NOT require a may_act claim in the
-     * subject token.
-     *
-     * @param tokReqMsgCtx  OauthTokenReqMessageContext
-     * @param requestParams request parameter map.
-     * @param tenantDomain  The tenant domain associated with the request.
-     * @throws IdentityOAuth2Exception If there's an error during token validation.
-     */
-    private void validateSubjectTokenForDelegation(OAuthTokenReqMessageContext tokReqMsgCtx,
-                                                   Map<String, String> requestParams,
-                                                   String tenantDomain,
-                                                   SignedJWT signedJWT,
-                                                   JWTClaimsSet claimsSet)
-            throws IdentityOAuth2Exception {
-
-        // Validate mandatory claims
-        String subject = resolveSubject(claimsSet);
-        validateMandatoryClaims(claimsSet, subject);
-
-        // NOTE: We SKIP impersonator validation for delegation
-        // In delegation, there is no may_act claim because this is not impersonation
-
-        String jwtIssuer = claimsSet.getIssuer();
-        IdentityProvider identityProvider = getIdentityProvider(tokReqMsgCtx, jwtIssuer, tenantDomain);
-
-        try {
-            if (validateSignature(signedJWT, identityProvider, tenantDomain)) {
-                log.debug("Signature/MAC validated successfully for subject token.");
-            } else {
-                handleException(OAuth2ErrorCodes.INVALID_REQUEST, "Signature or Message Authentication "
-                        + "invalid for subject token.");
-            }
-        } catch (JOSEException e) {
-            handleException(OAuth2ErrorCodes.INVALID_REQUEST, "Error when verifying signature for subject token ", e);
-        }
-
-        checkJWTValidity(claimsSet);
-
-        // Validate the audience of the subject token
-        List<String> audiences = claimsSet.getAudience();
-        if (!validateSubjectTokenAudience(audiences, tokReqMsgCtx)) {
-            TokenExchangeUtils.handleClientException(TokenExchangeConstants.INVALID_TARGET,
-                    "Invalid audience values provided for subject token.");
-        }
-
-        // Validate the issuer of the subject token
-        validateTokenIssuer(jwtIssuer, tenantDomain);
-
-        tokReqMsgCtx.addProperty(IMPERSONATED_SUBJECT, subject);
-        tokReqMsgCtx.setScope(getScopes(claimsSet, tokReqMsgCtx));
-    }
 
     /**
      * Validates the subject token for self-delegation scenarios where an
