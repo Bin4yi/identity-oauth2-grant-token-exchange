@@ -90,8 +90,6 @@ import static org.wso2.carbon.identity.oauth2.grant.token.exchange.utils.TokenEx
 import static org.wso2.carbon.identity.oauth2.grant.token.exchange.utils.TokenExchangeUtils.validateIssuedAtTime;
 import static org.wso2.carbon.identity.oauth2.grant.token.exchange.utils.TokenExchangeUtils.validateSignature;
 import static org.wso2.carbon.identity.oauth2.util.OAuth2Util.isJWT;
-import static org.wso2.carbon.identity.oauth2.token.AccessTokenIssuer.OAUTH_APP_DO;
-import org.wso2.carbon.identity.oauth.dao.OAuthAppDO;
 
 /**
  * Class to handle Token Exchange grant type.
@@ -137,7 +135,7 @@ public class TokenExchangeGrantHandler extends AbstractAuthorizationGrantHandler
         // Act exists but wrong type = INVALID TOKEN
         if (!(rawActClaim instanceof Map)) {
             handleException(OAuth2ErrorCodes.INVALID_REQUEST,
-                "Invalid act claim: expected JSON object, got " + rawActClaim.getClass().getName());
+                    "Invalid act claim: expected JSON object, got " + rawActClaim.getClass().getName());
         }
 
         Map<String, Object> actClaim = (Map<String, Object>) rawActClaim;
@@ -145,7 +143,7 @@ public class TokenExchangeGrantHandler extends AbstractAuthorizationGrantHandler
         // Act exists but missing required 'sub' = INVALID TOKEN
         if (actClaim.get(SUB) == null) {
             handleException(OAuth2ErrorCodes.INVALID_REQUEST,
-                "Invalid act claim: missing required 'sub' field as per RFC 8693");
+                    "Invalid act claim: missing required 'sub' field as per RFC 8693");
         }
 
         return actClaim;
@@ -208,24 +206,6 @@ public class TokenExchangeGrantHandler extends AbstractAuthorizationGrantHandler
             requestedAudience = requestParams.get(Constants.TokenExchangeConstants.AUDIENCE);
         }
 
-        // Set requested audience in the token request context so JWTTokenIssuer can use it
-        if (StringUtils.isNotEmpty(requestedAudience)) {
-            // Parse comma-separated audiences if multiple are provided
-            List<String> requestedAudiences = Arrays.asList(requestedAudience.split(","))
-                    .stream()
-                    .map(String::trim)
-                    .filter(StringUtils::isNotEmpty)
-                    .collect(Collectors.toList());
-
-            if (!requestedAudiences.isEmpty()) {
-                validateRequestedAudience(tokReqMsgCtx, requestedAudiences);
-                tokReqMsgCtx.setAudiences(requestedAudiences);
-                if (log.isDebugEnabled()) {
-                    log.debug("Requested audiences in token exchange: " + requestedAudiences);
-                }
-            }
-        }
-
         String tenantDomain = getTenantDomain(tokReqMsgCtx);
         SignedJWT subjectSignedJWT = getSignedJWT(requestParams.get(SUBJECT_TOKEN));
         JWTClaimsSet subjectClaimsSet = (subjectSignedJWT != null) ? getClaimSet(subjectSignedJWT) : null;
@@ -245,9 +225,7 @@ public class TokenExchangeGrantHandler extends AbstractAuthorizationGrantHandler
                 tokReqMsgCtx.addProperty("EXISTING_ACT_CLAIM", existingActClaim);
             }
 
-            // No need to validate actor token in self-delegation
-            // Set impersonation flag to false for self-delegation
-            tokReqMsgCtx.setImpersonationRequest(false);
+            // No need to validate actor token in self-delegatin
             setSubjectAsAuthorizedUser(tokReqMsgCtx, requestParams, tenantDomain);
             return true;
         }
@@ -266,14 +244,15 @@ public class TokenExchangeGrantHandler extends AbstractAuthorizationGrantHandler
             validateSubjectTokenForDelegation(tokReqMsgCtx, requestParams, tenantDomain, subjectSignedJWT, subjectClaimsSet);
             validateActorTokenForDelegation(tokReqMsgCtx, requestParams, tenantDomain);
             // Set impersonation flag to false for delegation
-            tokReqMsgCtx.setImpersonationRequest(false);
             tokReqMsgCtx.addProperty(IS_DELEGATION_REQUEST, true);
 
             // Extract and set actor subject from actor token
             SignedJWT actorSignedJWT = getSignedJWT(requestParams.get(TokenExchangeConstants.ACTOR_TOKEN));
             JWTClaimsSet actorClaimsSet = getClaimSet(actorSignedJWT);
             String actorSubject = resolveSubject(actorClaimsSet);
-            log.debug("Processing delegation request with actor subject: " + actorSubject);
+            if (log.isDebugEnabled()) {
+                log.debug("Processing delegation request with actor subject: " + actorSubject);
+            }
             tokReqMsgCtx.addProperty(ACTOR_SUBJECT, actorSubject);
             Object actorAzpClaim = actorClaimsSet.getClaim(TokenExchangeConstants.AZP);
             if (actorAzpClaim != null) {
@@ -309,54 +288,6 @@ public class TokenExchangeGrantHandler extends AbstractAuthorizationGrantHandler
                     "Unsupported subject token type : " + subjectTokenType + " provided");
         }
         return true;
-    }
-
-    /**
-     * Validates that the requested audience is allowed for the application.
-     *
-     * @param tokReqMsgCtx OAuthTokenReqMessageContext
-     * @param requestedAudiences Requested audiences
-     * @throws IdentityOAuth2Exception if validation fails
-     */
-    private void validateRequestedAudience(OAuthTokenReqMessageContext tokReqMsgCtx,
-                                           List<String> requestedAudiences)
-            throws IdentityOAuth2Exception {
-
-        if (requestedAudiences == null || requestedAudiences.isEmpty()) {
-            return;
-        }
-
-        // Get the OAuthAppDO to check allowed audiences
-        OAuthAppDO oAuthAppDO = (OAuthAppDO) tokReqMsgCtx.getProperty(OAUTH_APP_DO);
-        if (oAuthAppDO == null) {
-            // Try to load it
-            try {
-                String consumerKey = tokReqMsgCtx.getOauth2AccessTokenReqDTO().getClientId();
-                String tenantDomain = getTenantDomain(tokReqMsgCtx);
-                oAuthAppDO = OAuth2Util.getAppInformationByClientId(consumerKey, tenantDomain);
-            } catch (Exception e) {
-                handleException(OAuth2ErrorCodes.SERVER_ERROR,
-                        "Error while retrieving application information", e);
-            }
-        }
-
-        // Get allowed audiences for this application
-        List<String> allowedAudiences = OAuth2Util.getOIDCAudience(
-                tokReqMsgCtx.getOauth2AccessTokenReqDTO().getClientId(),
-                oAuthAppDO);
-
-        // Validate each requested audience
-        for (String requestedAud : requestedAudiences) {
-            if (!allowedAudiences.contains(requestedAud)) {
-                handleException(OAuth2ErrorCodes.INVALID_REQUEST,
-                        "Requested audience '" + requestedAud + "' is not allowed for this application. " +
-                                "Allowed audiences: " + String.join(", ", allowedAudiences));
-            }
-        }
-
-        if (log.isDebugEnabled()) {
-            log.debug("Requested audiences validated successfully: " + requestedAudiences);
-        }
     }
 
     /**
@@ -463,27 +394,6 @@ public class TokenExchangeGrantHandler extends AbstractAuthorizationGrantHandler
 
         // Validate the audience of the subject token
         List<String> audiences = claimsSet.getAudience();
-
-        // Check if issuer is in the audience list
-        String idpIssuerName = OAuth2Util.getIssuerLocation(tenantDomain);
-        boolean issuerInAudience = audiences != null && audiences.contains(idpIssuerName);
-
-        if (!issuerInAudience) {
-            // Fallback: Check if the issuer alias value is present in audience
-            String idpAlias = getIDPAlias(identityProvider, tenantDomain);
-            if (StringUtils.isNotEmpty(idpAlias)) {
-                issuerInAudience = audiences.stream().anyMatch(aud -> aud.equals(idpAlias));
-            }
-
-            // If still not found in audience, validate the iss claim as fallback
-            if (!issuerInAudience) {
-                if (log.isDebugEnabled()) {
-                    log.debug("Issuer not found in audience list. Validating iss claim as fallback.");
-                }
-                validateTokenIssuer(jwtIssuer, tenantDomain);
-            }
-        }
-
         if (!validateSubjectTokenAudience(audiences, tokReqMsgCtx)) {
             TokenExchangeUtils.handleClientException(TokenExchangeConstants.INVALID_TARGET,
                     "Invalid audience values provided for subject token.");
@@ -496,7 +406,7 @@ public class TokenExchangeGrantHandler extends AbstractAuthorizationGrantHandler
         tokReqMsgCtx.setScope(getScopes(claimsSet, tokReqMsgCtx));
     }
 
-        /**
+    /**
      * Validates the subject token for delegation scenarios.
      * Unlike impersonation, delegation does NOT require a may_act claim in the
      * subject token.
@@ -538,34 +448,13 @@ public class TokenExchangeGrantHandler extends AbstractAuthorizationGrantHandler
 
         // Validate the audience of the subject token
         List<String> audiences = claimsSet.getAudience();
-
-        // Check if issuer is in the audience list
-        String idpIssuerName = OAuth2Util.getIssuerLocation(tenantDomain);
-        boolean issuerInAudience = audiences != null && audiences.contains(idpIssuerName);
-
-        if (!issuerInAudience) {
-            // Fallback: Check if the issuer alias value is present in audience
-            String idpAlias = getIDPAlias(identityProvider, tenantDomain);
-            if (StringUtils.isNotEmpty(idpAlias)) {
-                issuerInAudience = audiences.stream().anyMatch(aud -> aud.equals(idpAlias));
-            }
-
-            // If still not found in audience, validate the iss claim as fallback
-            if (!issuerInAudience) {
-                if (log.isDebugEnabled()) {
-                    log.debug("Issuer not found in audience list. Validating iss claim as fallback.");
-                }
-                validateTokenIssuer(jwtIssuer, tenantDomain);
-            }
-        }
-
-        // Validate that requesting client is in the audience list
         if (!validateSubjectTokenAudience(audiences, tokReqMsgCtx)) {
             TokenExchangeUtils.handleClientException(TokenExchangeConstants.INVALID_TARGET,
                     "Invalid audience values provided for subject token.");
         }
 
-        tokReqMsgCtx.addProperty(IMPERSONATED_SUBJECT, subject);
+        // Validate the issuer of the subject token
+        validateTokenIssuer(jwtIssuer, tenantDomain);
         tokReqMsgCtx.setScope(getScopes(claimsSet, tokReqMsgCtx));
     }
 
@@ -643,9 +532,6 @@ public class TokenExchangeGrantHandler extends AbstractAuthorizationGrantHandler
             TokenExchangeUtils.handleClientException(TokenExchangeConstants.INVALID_TARGET,
                     "Requesting client not found in audience list for subject token.");
         }
-
-        // Set subject property in context
-        tokReqMsgCtx.addProperty(IMPERSONATED_SUBJECT, subject);
 
         // Set scopes
         tokReqMsgCtx.setScope(getScopes(claimsSet, tokReqMsgCtx));
@@ -766,7 +652,7 @@ public class TokenExchangeGrantHandler extends AbstractAuthorizationGrantHandler
         if (signedJWT == null) {
             // If no valid subject token found, handle the exception
             handleException(OAuth2ErrorCodes.INVALID_REQUEST, "No Valid subject token was found for "
-                            + TokenExchangeConstants.TOKEN_EXCHANGE_GRANT_TYPE);
+                    + TokenExchangeConstants.TOKEN_EXCHANGE_GRANT_TYPE);
         }
 
         // Extract claims from the JWT
@@ -1142,7 +1028,7 @@ public class TokenExchangeGrantHandler extends AbstractAuthorizationGrantHandler
      * @throws IdentityOAuth2Exception if an error occurred when getting IDP
      */
     protected IdentityProvider getIdentityProvider(OAuthTokenReqMessageContext tokReqMsgCtx, String jwtIssuer,
-            String tenantDomain) throws IdentityOAuth2Exception {
+                                                   String tenantDomain) throws IdentityOAuth2Exception {
 
         return getIDP(jwtIssuer, tenantDomain);
     }
