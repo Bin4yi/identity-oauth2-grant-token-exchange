@@ -67,6 +67,7 @@ import java.util.ArrayList;
 
 import static org.wso2.carbon.identity.oauth.common.OAuthConstants.IMPERSONATED_SUBJECT;
 import static org.wso2.carbon.identity.oauth.common.OAuthConstants.IMPERSONATING_ACTOR;
+import static org.wso2.carbon.identity.oauth.common.OAuthConstants.DELEGATING_ACTOR;
 import static org.wso2.carbon.identity.oauth.common.OAuthConstants.ORG_ID;
 import static org.wso2.carbon.identity.oauth2.grant.token.exchange.Constants.TokenExchangeConstants.MAY_ACT;
 import static org.wso2.carbon.identity.oauth2.grant.token.exchange.Constants.TokenExchangeConstants.SUB;
@@ -533,6 +534,9 @@ public class TokenExchangeGrantHandler extends AbstractAuthorizationGrantHandler
                     "Requesting client not found in audience list for subject token.");
         }
 
+        // Set subject property in context
+        tokReqMsgCtx.addProperty(IMPERSONATED_SUBJECT, subject);
+
         // Set scopes
         tokReqMsgCtx.setScope(getScopes(claimsSet, tokReqMsgCtx));
     }
@@ -728,10 +732,6 @@ public class TokenExchangeGrantHandler extends AbstractAuthorizationGrantHandler
         String actorTokenSubject = resolveSubject(claimsSet);
         validateMandatoryClaims(claimsSet, actorTokenSubject);
 
-        // NOTE: For delegation, we skip the impersonator check since there's no may_act
-        // claim
-        // in the subject token. The actor is simply delegating on behalf of the
-        // subject.
 
         String jwtIssuer = claimsSet.getIssuer();
         IdentityProvider identityProvider = getIdentityProvider(tokReqMsgCtx, jwtIssuer, tenantDomain);
@@ -753,7 +753,7 @@ public class TokenExchangeGrantHandler extends AbstractAuthorizationGrantHandler
         // Validate the issuer of the actor token
         validateTokenIssuer(jwtIssuer, tenantDomain);
 
-        tokReqMsgCtx.addProperty(IMPERSONATING_ACTOR, actorTokenSubject);
+        tokReqMsgCtx.addProperty(DELEGATING_ACTOR, actorTokenSubject);
     }
 
     private void validateTokenIssuer(String jwtIssuer, String tenantDomain) throws IdentityOAuth2Exception {
@@ -1028,7 +1028,7 @@ public class TokenExchangeGrantHandler extends AbstractAuthorizationGrantHandler
      * @throws IdentityOAuth2Exception if an error occurred when getting IDP
      */
     protected IdentityProvider getIdentityProvider(OAuthTokenReqMessageContext tokReqMsgCtx, String jwtIssuer,
-                                                   String tenantDomain) throws IdentityOAuth2Exception {
+            String tenantDomain) throws IdentityOAuth2Exception {
 
         return getIDP(jwtIssuer, tenantDomain);
     }
