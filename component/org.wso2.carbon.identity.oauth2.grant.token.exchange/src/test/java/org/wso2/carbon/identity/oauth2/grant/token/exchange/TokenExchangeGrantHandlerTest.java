@@ -58,7 +58,6 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
-import java.util.Map;
 
 import static org.wso2.carbon.identity.oauth.common.OAuthConstants.ACTOR_AZP;
 import static org.wso2.carbon.identity.oauth.common.OAuthConstants.ACTOR_SUBJECT;
@@ -68,6 +67,9 @@ import static org.wso2.carbon.identity.oauth.common.OAuthConstants.IMPERSONATED_
 import static org.wso2.carbon.identity.oauth.common.OAuthConstants.IMPERSONATING_ACTOR;
 import static org.wso2.carbon.identity.oauth.common.OAuthConstants.IS_DELEGATION_REQUEST;
 
+/**
+ * Unit tests for {@link TokenExchangeGrantHandler}.
+ */
 public class TokenExchangeGrantHandlerTest {
 
     private SignedJWT signedJWT;
